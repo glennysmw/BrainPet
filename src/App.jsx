@@ -7,7 +7,34 @@ import React, { useState, useEffect, useRef } from "react";
 // XP is permanent (doomscrolling doesn't take it away).
 // Energy is the daily mood. Level is the long-term identity.
 
-const STORAGE_KEY = "brainpet-state-v2";
+const STORAGE_KEY = "brainpet-state-v3";
+
+// ============================================================
+// ACHIEVEMENT BADGES
+// ============================================================
+const BADGES = [
+  // Focus milestones
+  { id: "first_focus", name: "First Focus", icon: "✦", desc: "Complete your first focus session.", check: (s) => s.totalFocusSessions >= 1 },
+  { id: "focus_10", name: "Getting Real", icon: "◆", desc: "Complete 10 focus sessions.", check: (s) => s.totalFocusSessions >= 10 },
+  { id: "focus_50", name: "Half-Centurion", icon: "❖", desc: "Complete 50 focus sessions.", check: (s) => s.totalFocusSessions >= 50 },
+  { id: "deep_work", name: "Deep Work", icon: "▲", desc: "Complete a 90-minute focus session.", check: (s) => s.longestFocusSession >= 90 },
+  { id: "marathon", name: "Marathon Mind", icon: "△", desc: "Hit 500 total focus minutes.", check: (s) => s.totalFocusMinutes >= 500 },
+
+  // Streak milestones
+  { id: "streak_3", name: "Three in a Row", icon: "⊹", desc: "Maintain a 3-day streak.", check: (s) => s.streak >= 3 },
+  { id: "streak_7", name: "One Week Strong", icon: "✧", desc: "Maintain a 7-day streak.", check: (s) => s.streak >= 7 },
+  { id: "streak_30", name: "Made it a Month", icon: "✺", desc: "Maintain a 30-day streak.", check: (s) => s.streak >= 30 },
+
+  // Evolution milestones
+  { id: "evolved_bloom", name: "Bloomed", icon: "❀", desc: "Reach the Bloom stage.", check: (s) => ["bloom", "glow", "sage", "radiant"].includes(s.highestStageReached) },
+  { id: "evolved_glow", name: "Inner Glow", icon: "✷", desc: "Reach the Glow stage.", check: (s) => ["glow", "sage", "radiant"].includes(s.highestStageReached) },
+  { id: "evolved_sage", name: "Wisdom Earned", icon: "✜", desc: "Reach the Sage stage.", check: (s) => ["sage", "radiant"].includes(s.highestStageReached) },
+  { id: "evolved_radiant", name: "Fully Radiant", icon: "✦", desc: "Reach the Radiant stage.", check: (s) => s.highestStageReached === "radiant" },
+
+  // Hidden / playful
+  { id: "named_pet", name: "Named", icon: "♡", desc: "Give your pet a real name.", check: (s) => s.name && s.name !== "blob" },
+  { id: "resilient", name: "Resilient", icon: "◈", desc: "Recover from below 10% energy.", check: (s) => s.recoveredFromLow },
+];
 
 // ============================================================
 // EVOLUTION SYSTEM
@@ -95,6 +122,13 @@ const defaultState = () => ({
   messages: [{ from: "pet", text: "hi! i'm your blob. let's grow together :)", t: Date.now() }],
   totalFocusSessions: 0,
   totalDoomMinutes: 0,
+  // New in v3
+  totalFocusMinutes: 0,
+  longestFocusSession: 0,
+  recoveredFromLow: false,
+  earnedBadges: [], // array of badge ids
+  focusHistory: {}, // { "Mon Jan 01 2024": minutes, ... }
+  hasOnboarded: false,
 });
 
 export default function BrainpetApp() {
@@ -107,6 +141,7 @@ export default function BrainpetApp() {
   const [bounce, setBounce] = useState(false);
   const [levelUpModal, setLevelUpModal] = useState(null);
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [badgeToast, setBadgeToast] = useState(null);
   const focusInterval = useRef(null);
 
   useEffect(() => {
@@ -121,14 +156,38 @@ export default function BrainpetApp() {
         }
         setState(parsed);
       }
-    } catch (e) {}
+    } catch (e) { }
   }, []);
 
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (e) {}
+    } catch (e) { }
   }, [state]);
+
+  // Check for newly-earned badges whenever state changes
+  useEffect(() => {
+    const newlyEarned = BADGES.filter(
+      (b) => !state.earnedBadges.includes(b.id) && b.check(state)
+    );
+    if (newlyEarned.length > 0) {
+      // Add badges to state and show toast for the first one
+      setState((s) => ({
+        ...s,
+        earnedBadges: [...s.earnedBadges, ...newlyEarned.map((b) => b.id)],
+      }));
+      setBadgeToast(newlyEarned[0]);
+      setTimeout(() => setBadgeToast(null), 3500);
+    }
+  }, [
+    state.totalFocusSessions,
+    state.totalFocusMinutes,
+    state.longestFocusSession,
+    state.streak,
+    state.highestStageReached,
+    state.name,
+    state.recoveredFromLow,
+  ]);
 
   const bouncePet = () => {
     setBounce(true);
@@ -173,11 +232,14 @@ export default function BrainpetApp() {
   const simulateDoomscroll = (minutes) => {
     setState((s) => {
       const energyDrop = Math.min(s.energy, minutes * 1.2);
+      const newEnergy = Math.max(0, s.energy - energyDrop);
       return {
         ...s,
         doomMinutes: s.doomMinutes + minutes,
         totalDoomMinutes: s.totalDoomMinutes + minutes,
-        energy: Math.max(0, s.energy - energyDrop),
+        energy: newEnergy,
+        // Mark that user hit low energy — used for "resilient" badge
+        hitLowEnergy: s.hitLowEnergy || newEnergy < 10,
       };
     });
     bouncePet();
@@ -187,11 +249,18 @@ export default function BrainpetApp() {
 
   const simulateFocus = (minutes) => {
     const xpGained = XP.focusSession(minutes);
+    const today = new Date().toDateString();
     setState((s) => ({
       ...s,
       focusMinutes: s.focusMinutes + minutes,
+      totalFocusMinutes: s.totalFocusMinutes + minutes,
       totalFocusSessions: s.totalFocusSessions + 1,
+      longestFocusSession: Math.max(s.longestFocusSession, minutes),
       energy: Math.min(100, s.energy + minutes * 0.8),
+      focusHistory: {
+        ...s.focusHistory,
+        [today]: (s.focusHistory[today] || 0) + minutes,
+      },
     }));
     bouncePet();
     petSays(pick(PET_LINES.focusComplete) + ` (+${xpGained} xp)`);
@@ -199,7 +268,15 @@ export default function BrainpetApp() {
   };
 
   const simulateRest = () => {
-    setState((s) => ({ ...s, energy: Math.min(100, s.energy + 15) }));
+    setState((s) => {
+      const newEnergy = Math.min(100, s.energy + 15);
+      return {
+        ...s,
+        energy: newEnergy,
+        // Resilient badge triggers when user bounces back from below 10%
+        recoveredFromLow: s.recoveredFromLow || (s.hitLowEnergy && newEnergy >= 50),
+      };
+    });
     bouncePet();
     petSays(pick(PET_LINES.recovery));
   };
@@ -286,7 +363,7 @@ export default function BrainpetApp() {
   const confirmReset = () => {
     try {
       localStorage.removeItem(STORAGE_KEY);
-    } catch (e) {}
+    } catch (e) { }
     setState(defaultState());
     setResetConfirm(false);
   };
@@ -296,11 +373,33 @@ export default function BrainpetApp() {
     if (n && n.trim()) setState((s) => ({ ...s, name: n.trim().toLowerCase() }));
   };
 
+  const completeOnboarding = (chosenName) => {
+    setState((s) => ({
+      ...s,
+      name: chosenName && chosenName.trim() ? chosenName.trim().toLowerCase() : "blob",
+      hasOnboarded: true,
+    }));
+  };
+
+  const replayOnboarding = () => {
+    setState((s) => ({ ...s, hasOnboarded: false }));
+  };
+
   const petState = getState(state.energy);
   const { level, xpInLevel, xpToNext } = levelFromXp(state.totalXp);
   const stage = getStageForLevel(level);
   const minutes = Math.floor(focusTime / 60);
   const seconds = focusTime % 60;
+
+  // Show onboarding on first visit
+  if (!state.hasOnboarded) {
+    return (
+      <>
+        <style>{globalCSS}</style>
+        <Onboarding onComplete={completeOnboarding} />
+      </>
+    );
+  }
 
   return (
     <div style={styles.app}>
@@ -332,6 +431,7 @@ export default function BrainpetApp() {
             bounce={bounce}
             onRename={renamePet}
             onCheckIn={dailyCheckIn}
+            onChatClick={() => setView("chat")}
           />
         )}
         {view === "focus" && (
@@ -359,6 +459,7 @@ export default function BrainpetApp() {
         {view === "evolution" && (
           <EvolutionView currentStage={stage} highestReached={state.highestStageReached} />
         )}
+        {view === "badges" && <BadgesView earnedBadges={state.earnedBadges} />}
         {view === "sim" && (
           <SimView
             onDoom={simulateDoomscroll}
@@ -366,6 +467,7 @@ export default function BrainpetApp() {
             onRest={simulateRest}
             onStreak={incrementStreak}
             onReset={resetPet}
+            onReplayOnboarding={replayOnboarding}
           />
         )}
         {view === "stats" && <StatsView state={state} level={level} stage={stage} />}
@@ -375,10 +477,12 @@ export default function BrainpetApp() {
         <NavBtn active={view === "home"} onClick={() => setView("home")}>home</NavBtn>
         <NavBtn active={view === "focus"} onClick={() => setView("focus")}>focus</NavBtn>
         <NavBtn active={view === "evolution"} onClick={() => setView("evolution")}>evo</NavBtn>
-        <NavBtn active={view === "chat"} onClick={() => setView("chat")}>chat</NavBtn>
+        <NavBtn active={view === "badges"} onClick={() => setView("badges")}>badges</NavBtn>
         <NavBtn active={view === "stats"} onClick={() => setView("stats")}>stats</NavBtn>
         <NavBtn active={view === "sim"} onClick={() => setView("sim")}>sim</NavBtn>
       </div>
+
+      {badgeToast && <BadgeToast badge={badgeToast} />}
 
       {levelUpModal && (
         <LevelUpModal data={levelUpModal} onClose={() => setLevelUpModal(null)} petState={petState} />
@@ -583,9 +687,225 @@ function ResetConfirmModal({ onConfirm, onCancel }) {
 }
 
 // ============================================================
+// ONBOARDING — 3-step intro shown on first visit
+// ============================================================
+function Onboarding({ onComplete }) {
+  const [step, setStep] = useState(0);
+  const [chosenName, setChosenName] = useState("");
+  const previewState = STATES.happy;
+  const previewStage = STAGES[0];
+
+  const next = () => setStep((s) => s + 1);
+
+  return (
+    <div style={styles.onboardWrap}>
+      {step === 0 && (
+        <div style={styles.onboardStep}>
+          <div style={styles.onboardLabel}>step 1 of 3</div>
+          <PetBlob petState={previewState} stage={previewStage} bounce={false} size={180} />
+          <h1 style={styles.onboardTitle}>
+            meet your <em>blob</em>.
+          </h1>
+          <p style={styles.onboardBody}>
+            this is a tiny companion that mirrors your phone habits. when you focus,
+            it thrives. when you doomscroll, it wilts. always lovingly.
+          </p>
+          <button style={styles.onboardBtn} onClick={next}>continue →</button>
+        </div>
+      )}
+
+      {step === 1 && (
+        <div style={styles.onboardStep}>
+          <div style={styles.onboardLabel}>step 2 of 3</div>
+          <h1 style={styles.onboardTitle}>how it works.</h1>
+          <div style={styles.onboardList}>
+            <div style={styles.onboardItem}>
+              <span style={styles.onboardBullet}>✦</span>
+              <div>
+                <strong>focus sessions earn xp.</strong>
+                <div style={styles.onboardSub}>longer sessions = bonus xp. your blob levels up and evolves.</div>
+              </div>
+            </div>
+            <div style={styles.onboardItem}>
+              <span style={styles.onboardBullet}>◆</span>
+              <div>
+                <strong>doomscrolling drains energy.</strong>
+                <div style={styles.onboardSub}>but it never takes your xp. progress is permanent.</div>
+              </div>
+            </div>
+            <div style={styles.onboardItem}>
+              <span style={styles.onboardBullet}>❀</span>
+              <div>
+                <strong>5 evolution stages await.</strong>
+                <div style={styles.onboardSub}>sprout → bloom → glow → sage → radiant.</div>
+              </div>
+            </div>
+          </div>
+          <button style={styles.onboardBtn} onClick={next}>got it →</button>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div style={styles.onboardStep}>
+          <div style={styles.onboardLabel}>step 3 of 3</div>
+          <PetBlob petState={previewState} stage={previewStage} bounce={false} size={140} />
+          <h1 style={styles.onboardTitle}>name your blob.</h1>
+          <p style={styles.onboardBody}>(or skip and call it "blob" for now.)</p>
+          <input
+            type="text"
+            value={chosenName}
+            onChange={(e) => setChosenName(e.target.value)}
+            placeholder="e.g. mochi, biscuit, kevin..."
+            maxLength={20}
+            style={styles.onboardInput}
+            autoFocus
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={styles.onboardBtnGhost} onClick={() => onComplete("")}>skip</button>
+            <button
+              style={{ ...styles.onboardBtn, opacity: chosenName.trim() ? 1 : 0.5 }}
+              onClick={() => onComplete(chosenName)}
+              disabled={!chosenName.trim()}
+            >
+              start →
+            </button>
+          </div>
+          <div style={styles.onboardDemoNote}>
+            <strong>tip for portfolio reviewers:</strong> head to the <em>sim</em> tab
+            anytime to fast-forward focus & doomscroll behaviors and see how the
+            pet reacts.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// FOCUS GRAPH — last 7 days of focus minutes
+// ============================================================
+function FocusGraph({ focusHistory }) {
+  // Build last 7 days, oldest → newest
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toDateString();
+    const label = d.toLocaleDateString("en-US", { weekday: "short" }).slice(0, 1);
+    days.push({ key, label, minutes: focusHistory[key] || 0 });
+  }
+  const max = Math.max(60, ...days.map((d) => d.minutes)); // floor of 60 so empty bars don't fill chart
+  const totalWeek = days.reduce((sum, d) => sum + d.minutes, 0);
+
+  return (
+    <div style={styles.graphCard}>
+      <div style={styles.graphHeader}>
+        <div style={styles.cardLabel}>focus · last 7 days</div>
+        <div style={styles.graphTotal}>{totalWeek}m total</div>
+      </div>
+      <svg width="100%" height="80" viewBox="0 0 280 80" preserveAspectRatio="none" style={{ display: "block" }}>
+        {days.map((d, i) => {
+          const barWidth = 28;
+          const gap = 12;
+          const x = i * (barWidth + gap) + 4;
+          const heightPct = d.minutes > 0 ? (d.minutes / max) * 60 : 0;
+          const y = 70 - heightPct;
+          const isToday = i === 6;
+          return (
+            <g key={d.key}>
+              {/* baseline dot for empty days */}
+              {d.minutes === 0 && (
+                <circle cx={x + barWidth / 2} cy={70} r={1.5} fill="#1a1a1a" opacity={0.2} />
+              )}
+              {d.minutes > 0 && (
+                <rect
+                  x={x}
+                  y={y}
+                  width={barWidth}
+                  height={heightPct}
+                  rx={3}
+                  fill={isToday ? "#1a1a1a" : "#7dd87d"}
+                  opacity={isToday ? 1 : 0.7}
+                />
+              )}
+              <text
+                x={x + barWidth / 2}
+                y={78}
+                textAnchor="middle"
+                fontSize="9"
+                fontFamily="'JetBrains Mono', monospace"
+                fill="#1a1a1a"
+                opacity={isToday ? 0.9 : 0.5}
+              >
+                {d.label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ============================================================
+// BADGES VIEW — earned + locked achievements
+// ============================================================
+function BadgesView({ earnedBadges }) {
+  const earnedCount = earnedBadges.length;
+  const totalCount = BADGES.length;
+
+  return (
+    <div style={styles.viewWrap}>
+      <div style={styles.sectionTitle}>badges</div>
+      <div style={styles.hint}>
+        {earnedCount} of {totalCount} earned. each one marks a real moment.
+      </div>
+
+      <div style={styles.badgeGrid}>
+        {BADGES.map((b) => {
+          const earned = earnedBadges.includes(b.id);
+          return (
+            <div
+              key={b.id}
+              style={{
+                ...styles.badgeCard,
+                opacity: earned ? 1 : 0.4,
+                background: earned ? "#fff" : "#f5f1e3",
+                borderColor: earned ? "#1a1a1a" : "rgba(0,0,0,0.1)",
+              }}
+            >
+              <div style={{ ...styles.badgeIcon, color: earned ? "#d4a800" : "#999" }}>
+                {earned ? b.icon : "?"}
+              </div>
+              <div style={styles.badgeName}>{earned ? b.name : "locked"}</div>
+              <div style={styles.badgeDesc}>{earned ? b.desc : "keep going."}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// BADGE TOAST — pops up when a badge is earned
+// ============================================================
+function BadgeToast({ badge }) {
+  return (
+    <div style={styles.badgeToast}>
+      <div style={styles.badgeToastIcon}>{badge.icon}</div>
+      <div>
+        <div style={styles.badgeToastLabel}>BADGE EARNED</div>
+        <div style={styles.badgeToastName}>{badge.name}</div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // VIEWS
 // ============================================================
-function HomeView({ state, petState, stage, level, xpInLevel, xpToNext, bounce, onRename, onCheckIn }) {
+function HomeView({ state, petState, stage, level, xpInLevel, xpToNext, bounce, onRename, onCheckIn, onChatClick }) {
   const greeting = (() => {
     const h = new Date().getHours();
     if (h < 12) return "good morning";
@@ -624,8 +944,11 @@ function HomeView({ state, petState, stage, level, xpInLevel, xpToNext, bounce, 
         <Stat label="streak" value={`${state.streak}d`} />
       </div>
 
-      <div style={styles.cardSoft}>
-        <div style={styles.cardLabel}>last message</div>
+      {/* Focus history graph — last 7 days */}
+      <FocusGraph focusHistory={state.focusHistory} />
+
+      <div style={styles.cardSoft} onClick={onChatClick}>
+        <div style={styles.cardLabel}>last message · tap to chat</div>
         <div style={styles.cardText}>"{state.messages[state.messages.length - 1]?.text || "..."}"</div>
       </div>
 
@@ -764,7 +1087,7 @@ function EvolutionView({ currentStage, highestReached }) {
   );
 }
 
-function SimView({ onDoom, onFocus, onRest, onStreak, onReset }) {
+function SimView({ onDoom, onFocus, onRest, onStreak, onReset, onReplayOnboarding }) {
   return (
     <div style={styles.viewWrap}>
       <div style={styles.sectionTitle}>simulator</div>
@@ -811,7 +1134,12 @@ function SimView({ onDoom, onFocus, onRest, onStreak, onReset }) {
         </div>
       </div>
 
-      <button style={styles.btnDanger} onClick={onReset}>reset pet</button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+        <button style={styles.simBtnNeutral} onClick={onReplayOnboarding}>
+          replay onboarding
+        </button>
+        <button style={styles.btnDanger} onClick={onReset}>reset pet</button>
+      </div>
     </div>
   );
 }
@@ -1390,5 +1718,215 @@ const styles = {
     fontFamily: "'JetBrains Mono', monospace",
     marginTop: 8,
     border: "1.5px solid rgba(0,0,0,0.2)",
+  },
+
+  // Onboarding
+  onboardWrap: {
+    minHeight: "100vh",
+    background: "#ebe6d8",
+    fontFamily: "'Fraunces', Georgia, serif",
+    color: "#1a1a1a",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "32px 24px",
+    maxWidth: 440,
+    margin: "0 auto",
+  },
+  onboardStep: {
+    width: "100%",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 16,
+    animation: "modal-in 0.5s cubic-bezier(.34,1.56,.64,1)",
+  },
+  onboardLabel: {
+    fontSize: 10,
+    fontFamily: "'JetBrains Mono', monospace",
+    textTransform: "uppercase",
+    letterSpacing: 2,
+    opacity: 0.5,
+  },
+  onboardTitle: {
+    fontSize: 32,
+    fontWeight: 600,
+    textAlign: "center",
+    lineHeight: 1.15,
+    margin: "8px 0 4px",
+  },
+  onboardBody: {
+    fontSize: 16,
+    textAlign: "center",
+    lineHeight: 1.5,
+    opacity: 0.75,
+    fontStyle: "italic",
+    maxWidth: 340,
+  },
+  onboardList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+    width: "100%",
+    maxWidth: 380,
+    margin: "12px 0",
+  },
+  onboardItem: {
+    display: "flex",
+    gap: 14,
+    alignItems: "flex-start",
+    background: "#fff",
+    padding: 16,
+    borderRadius: 14,
+    fontSize: 15,
+    lineHeight: 1.4,
+  },
+  onboardBullet: {
+    fontSize: 22,
+    color: "#d4a800",
+    flexShrink: 0,
+    lineHeight: 1,
+  },
+  onboardSub: {
+    fontSize: 13,
+    opacity: 0.65,
+    fontStyle: "italic",
+    marginTop: 4,
+  },
+  onboardBtn: {
+    background: "#1a1a1a",
+    color: "#fff",
+    padding: "14px 36px",
+    borderRadius: 100,
+    fontSize: 15,
+    fontFamily: "'JetBrains Mono', monospace",
+    marginTop: 8,
+  },
+  onboardBtnGhost: {
+    background: "transparent",
+    color: "#1a1a1a",
+    padding: "14px 28px",
+    borderRadius: 100,
+    fontSize: 15,
+    fontFamily: "'JetBrains Mono', monospace",
+    marginTop: 8,
+    border: "1.5px solid rgba(0,0,0,0.2)",
+  },
+  onboardInput: {
+    width: "100%",
+    maxWidth: 320,
+    padding: "14px 18px",
+    borderRadius: 100,
+    border: "1.5px solid rgba(0,0,0,0.2)",
+    fontSize: 16,
+    background: "#fff",
+    outline: "none",
+    textAlign: "center",
+    fontFamily: "'Fraunces', Georgia, serif",
+    fontStyle: "italic",
+  },
+  onboardDemoNote: {
+    marginTop: 24,
+    padding: 14,
+    background: "rgba(212, 168, 0, 0.12)",
+    border: "1px dashed rgba(212, 168, 0, 0.5)",
+    borderRadius: 12,
+    fontSize: 12,
+    fontStyle: "italic",
+    lineHeight: 1.5,
+    maxWidth: 340,
+    textAlign: "center",
+  },
+
+  // Focus graph
+  graphCard: {
+    width: "100%",
+    background: "#fff",
+    padding: "14px 16px",
+    borderRadius: 14,
+    boxShadow: "0 1px 0 rgba(0,0,0,0.04)",
+  },
+  graphHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  graphTotal: {
+    fontSize: 13,
+    fontWeight: 600,
+    fontStyle: "italic",
+  },
+
+  // Badges grid
+  badgeGrid: {
+    width: "100%",
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  },
+  badgeCard: {
+    padding: "16px 12px",
+    borderRadius: 14,
+    border: "1.5px solid",
+    textAlign: "center",
+    transition: "all 0.3s",
+    minHeight: 130,
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    gap: 4,
+  },
+  badgeIcon: {
+    fontSize: 32,
+    lineHeight: 1,
+    marginBottom: 4,
+  },
+  badgeName: {
+    fontSize: 14,
+    fontWeight: 600,
+    fontStyle: "italic",
+  },
+  badgeDesc: {
+    fontSize: 11,
+    opacity: 0.7,
+    fontStyle: "italic",
+    lineHeight: 1.3,
+  },
+
+  // Badge toast
+  badgeToast: {
+    position: "fixed",
+    top: 80,
+    left: "50%",
+    transform: "translateX(-50%)",
+    background: "#1a1a1a",
+    color: "#fff",
+    padding: "12px 18px",
+    borderRadius: 100,
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    zIndex: 200,
+    boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+    animation: "modal-in 0.4s cubic-bezier(.34,1.56,.64,1)",
+    maxWidth: 320,
+  },
+  badgeToastIcon: {
+    fontSize: 24,
+    color: "#d4a800",
+    lineHeight: 1,
+  },
+  badgeToastLabel: {
+    fontSize: 9,
+    fontFamily: "'JetBrains Mono', monospace",
+    letterSpacing: 1.5,
+    opacity: 0.6,
+  },
+  badgeToastName: {
+    fontSize: 14,
+    fontWeight: 600,
+    fontStyle: "italic",
   },
 };
