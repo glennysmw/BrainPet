@@ -144,6 +144,18 @@ export default function BrainpetApp() {
   const [badgeToast, setBadgeToast] = useState(null);
   const focusInterval = useRef(null);
 
+  // Ensure proper mobile viewport even if host index.html lacks the meta tag
+  useEffect(() => {
+    let meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.name = "viewport";
+      document.head.appendChild(meta);
+    }
+    meta.content =
+      "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1";
+  }, []);
+
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -402,7 +414,7 @@ export default function BrainpetApp() {
   }
 
   return (
-    <div style={styles.app}>
+    <div className="bp-min-vh" style={styles.app}>
       <style>{globalCSS}</style>
 
       <div style={styles.header}>
@@ -698,7 +710,7 @@ function Onboarding({ onComplete }) {
   const next = () => setStep((s) => s + 1);
 
   return (
-    <div style={styles.onboardWrap}>
+    <div className="bp-min-vh" style={styles.onboardWrap}>
       {step === 0 && (
         <div style={styles.onboardStep}>
           <div style={styles.onboardLabel}>step 1 of 3</div>
@@ -1005,7 +1017,7 @@ function ChatView({ messages, input, setInput, onSend, petName }) {
   }, [messages]);
 
   return (
-    <div style={styles.chatWrap}>
+    <div className="bp-chat-h" style={styles.chatWrap}>
       <div style={styles.sectionTitle}>chat with {petName}</div>
       <div style={styles.chatScroll} ref={scrollRef}>
         {messages.map((m, i) => (
@@ -1211,7 +1223,15 @@ const globalCSS = `
   @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=JetBrains+Mono:wght@400;500&display=swap');
   
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #ebe6d8; }
+  html, body {
+    background: #ebe6d8;
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body { -webkit-tap-highlight-color: transparent; }
+  input, button, textarea { -webkit-appearance: none; appearance: none; }
+  input { font-size: 16px !important; } /* prevents iOS zoom-on-focus */
   
   @keyframes breathe {
     0%, 100% { transform: scale(1) translateY(0); }
@@ -1249,19 +1269,24 @@ const globalCSS = `
   button { font-family: inherit; cursor: pointer; border: none; }
   input { font-family: inherit; }
   button:active { transform: scale(0.97); }
+  
+  /* Dynamic viewport height with fallback for older browsers */
+  .bp-min-vh { min-height: 100vh; min-height: 100dvh; }
+  .bp-chat-h { height: calc(100vh - 230px); height: calc(100dvh - 230px); }
 `;
 
 const styles = {
   app: {
+    width: "100%",
     maxWidth: 440,
     margin: "0 auto",
-    minHeight: "100vh",
     background: "#ebe6d8",
     fontFamily: "'Fraunces', Georgia, serif",
     color: "#1a1a1a",
     display: "flex",
     flexDirection: "column",
     position: "relative",
+    overflowX: "hidden",
   },
   header: {
     padding: "20px 24px 12px",
@@ -1312,9 +1337,14 @@ const styles = {
     background: color,
     boxShadow: `0 0 8px ${color}`,
   }),
-  main: { flex: 1, overflowY: "auto", padding: "16px 0 100px" },
+  main: {
+    flex: 1,
+    overflowY: "auto",
+    WebkitOverflowScrolling: "touch",
+    padding: "16px 0 calc(96px + env(safe-area-inset-bottom))",
+  },
   viewWrap: {
-    padding: "0 24px",
+    padding: "0 clamp(16px, 5vw, 24px)",
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
@@ -1373,11 +1403,12 @@ const styles = {
     background: "linear-gradient(90deg, #1a1a1a 0%, #4a4a4a 100%)",
     transition: "width 0.6s cubic-bezier(.34,1.56,.64,1)",
   },
-  statsRow: { display: "flex", gap: 10, width: "100%", justifyContent: "space-between" },
+  statsRow: { display: "flex", gap: 8, width: "100%", justifyContent: "space-between" },
   statBox: {
     flex: 1,
+    minWidth: 0,
     background: "#fff",
-    padding: "12px 10px",
+    padding: "12px 8px",
     borderRadius: 14,
     textAlign: "center",
     boxShadow: "0 1px 0 rgba(0,0,0,0.04)",
@@ -1425,14 +1456,14 @@ const styles = {
     marginTop: 8,
   },
   sectionTitle: {
-    fontSize: 24,
+    fontSize: "clamp(20px, 6vw, 24px)",
     fontWeight: 600,
     fontStyle: "italic",
     alignSelf: "flex-start",
     marginBottom: 4,
   },
   timer: {
-    fontSize: 64,
+    fontSize: "clamp(48px, 16vw, 64px)",
     fontWeight: 500,
     fontFamily: "'JetBrains Mono', monospace",
     letterSpacing: -2,
@@ -1450,7 +1481,13 @@ const styles = {
     background: "#1a1a1a",
     transition: "width 1s linear",
   },
-  presetRow: { display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" },
+  presetRow: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    justifyContent: "center",
+    width: "100%",
+  },
   presetBtn: {
     background: "#fff",
     padding: "12px 16px",
@@ -1459,7 +1496,8 @@ const styles = {
     fontWeight: 500,
     fontFamily: "'JetBrains Mono', monospace",
     border: "1.5px solid #1a1a1a",
-    minWidth: 70,
+    flex: "1 1 60px",
+    maxWidth: 90,
   },
   hint: {
     fontSize: 13,
@@ -1470,10 +1508,10 @@ const styles = {
     maxWidth: 320,
   },
   chatWrap: {
-    padding: "0 24px",
+    padding: "0 clamp(16px, 5vw, 24px)",
     display: "flex",
     flexDirection: "column",
-    height: "calc(100vh - 200px)",
+    minHeight: 320,
     gap: 12,
   },
   chatScroll: {
@@ -1622,25 +1660,31 @@ const styles = {
   nav: {
     position: "fixed",
     bottom: 0,
-    left: 0,
-    right: 0,
+    left: "50%",
+    transform: "translateX(-50%)",
+    width: "100%",
     maxWidth: 440,
-    margin: "0 auto",
     background: "rgba(235, 230, 216, 0.95)",
     backdropFilter: "blur(20px)",
-    padding: "12px 8px 20px",
+    WebkitBackdropFilter: "blur(20px)",
+    padding: "10px 4px max(16px, env(safe-area-inset-bottom))",
     display: "flex",
-    justifyContent: "space-around",
+    justifyContent: "space-between",
     borderTop: "1px solid rgba(0,0,0,0.08)",
+    boxSizing: "border-box",
   },
   navBtn: {
     background: "transparent",
-    fontSize: 11,
+    fontSize: 10,
     fontFamily: "'JetBrains Mono', monospace",
-    padding: "8px 6px",
+    padding: "8px 2px",
     color: "#1a1a1a",
     textTransform: "lowercase",
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
+    flex: 1,
+    textAlign: "center",
+    whiteSpace: "nowrap",
+    minWidth: 0,
   },
   modalOverlay: {
     position: "fixed",
@@ -1662,6 +1706,8 @@ const styles = {
     borderRadius: 24,
     maxWidth: 340,
     width: "85%",
+    maxHeight: "85dvh",
+    overflowY: "auto",
     textAlign: "center",
     border: "2px solid #1a1a1a",
     animation: "modal-in 0.5s cubic-bezier(.34,1.56,.64,1)",
@@ -1722,7 +1768,6 @@ const styles = {
 
   // Onboarding
   onboardWrap: {
-    minHeight: "100vh",
     background: "#ebe6d8",
     fontFamily: "'Fraunces', Georgia, serif",
     color: "#1a1a1a",
@@ -1730,9 +1775,11 @@ const styles = {
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    padding: "32px 24px",
+    padding: "max(24px, env(safe-area-inset-top)) clamp(16px, 5vw, 24px) max(24px, env(safe-area-inset-bottom))",
+    width: "100%",
     maxWidth: 440,
     margin: "0 auto",
+    overflowY: "auto",
   },
   onboardStep: {
     width: "100%",
@@ -1750,14 +1797,14 @@ const styles = {
     opacity: 0.5,
   },
   onboardTitle: {
-    fontSize: 32,
+    fontSize: "clamp(26px, 8vw, 32px)",
     fontWeight: 600,
     textAlign: "center",
     lineHeight: 1.15,
     margin: "8px 0 4px",
   },
   onboardBody: {
-    fontSize: 16,
+    fontSize: "clamp(14px, 4vw, 16px)",
     textAlign: "center",
     lineHeight: 1.5,
     opacity: 0.75,
@@ -1898,7 +1945,7 @@ const styles = {
   // Badge toast
   badgeToast: {
     position: "fixed",
-    top: 80,
+    top: "max(72px, env(safe-area-inset-top))",
     left: "50%",
     transform: "translateX(-50%)",
     background: "#1a1a1a",
@@ -1911,7 +1958,9 @@ const styles = {
     zIndex: 200,
     boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
     animation: "modal-in 0.4s cubic-bezier(.34,1.56,.64,1)",
-    maxWidth: 320,
+    width: "max-content",
+    maxWidth: "calc(100vw - 32px)",
+    boxSizing: "border-box",
   },
   badgeToastIcon: {
     fontSize: 24,
